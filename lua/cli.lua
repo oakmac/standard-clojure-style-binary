@@ -14,12 +14,108 @@ local version = scs_native.version
 local sep = scs_native.path_separator()
 
 -- ==========================================================================
--- Utility functions
+-- ANSI Color Support
+--
+-- Matches the styles used by yoctocolors in the JS CLI.
+-- Colors are only emitted when outputting to a terminal (TTY).
 -- ==========================================================================
 
-local function print_stderr(msg)
-	io.stderr:write(msg .. "\n")
+local stdout_is_tty = scs_native.is_tty(1)
+local stderr_is_tty = scs_native.is_tty(2)
+
+-- ANSI escape code helpers.
+-- Each takes a string and returns it wrapped in the appropriate escape codes,
+-- or returns it unchanged if the target stream is not a TTY.
+--
+-- The `for_stderr` parameter controls which TTY flag to check.
+-- By default (nil/false), checks stdout. Pass true for stderr output.
+
+local function bold(s, for_stderr)
+	local is_tty = for_stderr and stderr_is_tty or stdout_is_tty
+	if is_tty then
+		return "\x1b[1m" .. s .. "\x1b[22m"
+	end
+	return s
 end
+
+local function dim(s, for_stderr)
+	local is_tty = for_stderr and stderr_is_tty or stdout_is_tty
+	if is_tty then
+		return "\x1b[2m" .. s .. "\x1b[22m"
+	end
+	return s
+end
+
+local function red(s, for_stderr)
+	local is_tty = for_stderr and stderr_is_tty or stdout_is_tty
+	if is_tty then
+		return "\x1b[31m" .. s .. "\x1b[39m"
+	end
+	return s
+end
+
+local function green(s, for_stderr)
+	local is_tty = for_stderr and stderr_is_tty or stdout_is_tty
+	if is_tty then
+		return "\x1b[32m" .. s .. "\x1b[39m"
+	end
+	return s
+end
+
+local function yellow(s, for_stderr)
+	local is_tty = for_stderr and stderr_is_tty or stdout_is_tty
+	if is_tty then
+		return "\x1b[33m" .. s .. "\x1b[39m"
+	end
+	return s
+end
+
+-- ==========================================================================
+-- Logging
+-- ==========================================================================
+
+local log_level = "everything"
+
+local function set_log_level(level)
+	level = tostring(level or "everything")
+	if level == "ignore-already-formatted" or level == "1" then
+		log_level = "ignore-already-formatted"
+	elseif level == "quiet" or level == "5" then
+		log_level = "quiet"
+	else
+		log_level = "everything"
+	end
+end
+
+local function print_stdout(msg)
+	if log_level ~= "quiet" then
+		io.stdout:write(msg .. "\n")
+	end
+end
+
+local function print_stderr(msg)
+	if log_level ~= "quiet" then
+		io.stderr:write(msg .. "\n")
+	end
+end
+
+-- ==========================================================================
+-- Timing
+-- ==========================================================================
+
+-- os.clock() returns CPU time in seconds
+local script_start_time = os.clock()
+
+local function format_duration(seconds, for_stderr)
+	local ms = seconds * 1000
+	-- round to 2 decimal places
+	local rounded = math.floor(ms * 100 + 0.5) / 100
+	return dim("[" .. rounded .. "ms]", for_stderr)
+end
+
+-- ==========================================================================
+-- Utility functions
+-- ==========================================================================
 
 local function starts_with(str, prefix)
 	return string.sub(str, 1, #prefix) == prefix
@@ -35,6 +131,14 @@ local function has_clojure_extension(filename)
 		or ends_with(filename, ".cljc")
 		or ends_with(filename, ".edn")
 		or ends_with(filename, ".jank")
+end
+
+local function file_str(n)
+	if n == 1 then
+		return "file"
+	else
+		return "files"
+	end
 end
 
 -- ==========================================================================
@@ -204,7 +308,7 @@ local function resolve_arg_to_files(a, ignore_patterns)
 	-- Check if it might be a directory that's empty
 	-- list_directory returns empty table for both "not found" and "empty dir"
 	-- For now, warn and skip
-	print_stderr("WARN: could not find file or directory: " .. a)
+	print_stderr(bold(yellow("WARN", true), true) .. ' Could not find a file or directory at "' .. a .. '"')
 	return {}
 end
 
@@ -238,6 +342,11 @@ local function print_usage()
 	print("  echo '(ns foo)' | standard-clj fix -")
 end
 
+local function print_program_info(command)
+	print_stdout(bold("standard-clj " .. command) .. " " .. dim(version))
+	print_stdout("")
+end
+
 local function cmd_version()
 	print("standard-clj " .. version)
 	return 0
@@ -250,60 +359,99 @@ local function cmd_list(files)
 	return 0
 end
 
-local function cmd_check(files, config)
+local function cmd_check(files)
 	local scs = require("standard-clojure-style")
-	local log_level = config.log_level or "everything"
 
+	local at_least_one_file_printed = false
 	local num_already_formatted = 0
 	local num_need_formatting = 0
 	local num_errors = 0
 
 	for i = 1, #files do
 		local filename = files[i]
+		local file_start_time = os.clock()
 		local content = scs_native.read_file(filename)
 
 		if not content then
-			print_stderr("E " .. filename .. " - unable to read file")
+			print_stderr("Unable to read file: " .. filename)
+			at_least_one_file_printed = true
 			num_errors = num_errors + 1
 		else
 			local result = scs.format(content)
+			local file_end_time = os.clock()
+			local duration_seconds = file_end_time - file_start_time
 
 			if result and result.status == "success" then
 				local formatted = result.out .. "\n"
 				if formatted == content then
 					num_already_formatted = num_already_formatted + 1
+					if log_level ~= "ignore-already-formatted" then
+						print_stdout(
+							green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
+						)
+						at_least_one_file_printed = true
+					end
 				else
-					print_stderr("✗ " .. filename)
+					print_stderr(
+						red("\xE2\x9C\x97", true)
+							.. " "
+							.. bold(filename, true)
+							.. " "
+							.. format_duration(duration_seconds, true)
+					)
+					at_least_one_file_printed = true
 					num_need_formatting = num_need_formatting + 1
 				end
 			else
 				local reason = (result and result.reason) or "unknown error"
-				print_stderr("E " .. filename .. " - " .. reason)
+				print_stderr(
+					red("E", true)
+						.. " "
+						.. bold(red(filename, true), true)
+						.. " - "
+						.. reason
+						.. " "
+						.. format_duration(duration_seconds, true)
+				)
+				at_least_one_file_printed = true
 				num_errors = num_errors + 1
 			end
 		end
 	end
 
 	-- Summary
-	if log_level ~= "quiet" then
-		local total = num_already_formatted + num_need_formatting + num_errors
-		print("")
-		if num_need_formatting == 0 and num_errors == 0 then
-			print(total .. " file(s) formatted with Standard Clojure Style")
-		else
-			print(num_already_formatted .. " file(s) already formatted")
-			if num_need_formatting > 0 then
-				print(num_need_formatting .. " file(s) need formatting")
-			end
-			if num_errors > 0 then
-				print(num_errors .. " file(s) with errors")
-			end
-		end
+	local total = num_already_formatted + num_need_formatting + num_errors
+	local script_end_time = os.clock()
+	local script_duration_str = format_duration(script_end_time - script_start_time)
+
+	if at_least_one_file_printed then
+		print_stdout("")
 	end
 
 	if num_need_formatting == 0 and num_errors == 0 then
+		if total == 1 then
+			print_stdout(
+				green("1 file formatted with Standard Clojure Style \xF0\x9F\x91\x8D") .. " " .. script_duration_str
+			)
+		else
+			print_stdout(
+				green("All " .. total .. " files formatted with Standard Clojure Style \xF0\x9F\x91\x8D")
+					.. " "
+					.. script_duration_str
+			)
+		end
 		return 0
 	else
+		print_stdout(
+			green(
+				num_already_formatted
+					.. " "
+					.. file_str(num_already_formatted)
+					.. " formatted with Standard Clojure Style"
+			)
+		)
+		print_stdout(red(num_need_formatting .. " " .. file_str(num_need_formatting) .. " require formatting"))
+		print_stdout("Checked " .. total .. " " .. file_str(total) .. ". " .. script_duration_str)
 		return 1
 	end
 end
@@ -313,81 +461,122 @@ local function cmd_fix_stdin()
 
 	local input = io.stdin:read("*a")
 	if not input or input == "" then
-		print_stderr("Nothing found on stdin.")
+		print_stderr('Nothing found on stdin. Please pipe some Clojure code to stdin when using "standard-clj fix -"')
 		return 1
 	end
 
 	local result = scs.format(input)
 
 	if result and result.status == "success" then
-		print(result.out)
+		io.stdout:write(result.out .. "\n")
 		return 0
 	elseif result and result.status == "error" then
 		print_stderr("Failed to format code: " .. (result.reason or "unknown"))
 		return 1
 	else
-		print_stderr("Failed to format code due to unknown error.")
+		print_stderr(
+			"Failed to format code due to unknown error with the format() function. Please help the standard-clj project by opening an issue to report this."
+		)
 		return 1
 	end
 end
 
-local function cmd_fix(files, config)
+local function cmd_fix(files)
 	local scs = require("standard-clojure-style")
-	local log_level = config.log_level or "everything"
 
+	local at_least_one_file_printed = false
 	local num_already_formatted = 0
 	local num_formatted = 0
 	local num_errors = 0
 
 	for i = 1, #files do
 		local filename = files[i]
+		local file_start_time = os.clock()
 		local content = scs_native.read_file(filename)
 
 		if not content then
-			print_stderr("E " .. filename .. " - unable to read file")
+			print_stderr("Unable to read file: " .. filename)
+			at_least_one_file_printed = true
 			num_errors = num_errors + 1
 		else
 			local result = scs.format(content)
+			local file_end_time = os.clock()
+			local duration_seconds = file_end_time - file_start_time
 
 			if result and result.status == "success" then
 				local formatted = result.out .. "\n"
 				if formatted == content then
 					num_already_formatted = num_already_formatted + 1
+					if log_level ~= "ignore-already-formatted" then
+						print_stdout(
+							green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
+						)
+						at_least_one_file_printed = true
+					end
 				else
 					local ok, err = scs_native.write_file(filename, formatted)
 					if ok then
-						if log_level == "everything" then
-							print("F " .. filename)
-						end
+						print_stdout(green("F") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds))
+						at_least_one_file_printed = true
 						num_formatted = num_formatted + 1
 					else
-						print_stderr("E " .. filename .. " - " .. (err or "write error"))
+						print_stderr(
+							red("E", true)
+								.. " "
+								.. bold(red(filename, true), true)
+								.. " - "
+								.. (err or "write error")
+								.. " "
+								.. format_duration(duration_seconds, true)
+						)
+						at_least_one_file_printed = true
 						num_errors = num_errors + 1
 					end
 				end
 			else
 				local reason = (result and result.reason) or "unknown error"
-				print_stderr("E " .. filename .. " - " .. reason)
+				print_stderr(
+					red("E", true)
+						.. " "
+						.. bold(red(filename, true), true)
+						.. " - "
+						.. reason
+						.. " "
+						.. format_duration(duration_seconds, true)
+				)
+				at_least_one_file_printed = true
 				num_errors = num_errors + 1
 			end
 		end
 	end
 
 	-- Summary
-	if log_level ~= "quiet" then
-		local total = num_already_formatted + num_formatted + num_errors
-		print("")
-		if num_errors == 0 then
-			print(total .. " file(s) formatted with Standard Clojure Style")
-		else
-			print((num_already_formatted + num_formatted) .. " file(s) formatted")
-			print(num_errors .. " file(s) with errors")
-		end
+	local total = num_already_formatted + num_formatted + num_errors
+	local num_ok = num_already_formatted + num_formatted
+	local script_end_time = os.clock()
+	local script_duration_str = format_duration(script_end_time - script_start_time)
+
+	if at_least_one_file_printed then
+		print_stdout("")
 	end
 
 	if num_errors == 0 then
+		if total == 1 then
+			print_stdout(
+				green("1 file formatted with Standard Clojure Style \xF0\x9F\x91\x8D") .. " " .. script_duration_str
+			)
+		else
+			print_stdout(
+				green("All " .. total .. " files formatted with Standard Clojure Style \xF0\x9F\x91\x8D")
+					.. " "
+					.. script_duration_str
+			)
+		end
 		return 0
 	else
+		print_stdout(green(num_ok .. " " .. file_str(num_ok) .. " formatted with Standard Clojure Style"))
+		print_stdout(red(num_errors .. " " .. file_str(num_errors) .. " with errors"))
+		print_stdout("Checked " .. total .. " " .. file_str(total) .. ". " .. script_duration_str)
 		return 1
 	end
 end
@@ -488,6 +677,12 @@ end
 
 local config = merge_config(options, file_config)
 
+-- Set log level from merged config
+set_log_level(config.log_level)
+
+-- Print program info header
+print_program_info(command)
+
 -- Resolve paths to file lists
 local files = {}
 for i = 1, #paths do
@@ -503,7 +698,11 @@ end
 table.sort(files)
 
 if #files == 0 then
-	print_stderr("No files found. Pass a filename, directory, or --include glob pattern.")
+	print_stderr(
+		'No files were passed to the "'
+			.. command
+			.. '" command. Please pass a filename, directory, or --include glob pattern.'
+	)
 	return 1
 end
 
@@ -511,9 +710,9 @@ end
 if command == "list" then
 	return cmd_list(files)
 elseif command == "check" then
-	return cmd_check(files, config)
+	return cmd_check(files)
 elseif command == "fix" then
-	return cmd_fix(files, config)
+	return cmd_fix(files)
 end
 
 return 1

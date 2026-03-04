@@ -22,12 +22,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Platform-specific includes for directory traversal
+// Platform-specific includes
 #ifdef _WIN32
+#include <io.h>
 #include <windows.h>
 #else
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 // Generated at build time from .lua source files.
@@ -266,6 +268,28 @@ static int l_is_absolute_path(lua_State *L) {
 }
 
 // ============================================================================
+// Native Helpers — TTY Detection
+//
+// Returns whether a file descriptor (1=stdout, 2=stderr) is a terminal.
+// Used by the Lua CLI to decide whether to emit ANSI color codes.
+// ============================================================================
+
+// is_tty(fd) -> boolean
+//
+// Returns true if the given file descriptor is connected to a terminal.
+// fd=1 for stdout, fd=2 for stderr.
+static int l_is_tty(lua_State *L) {
+  int fd = (int)luaL_checkinteger(L, 1);
+
+#ifdef _WIN32
+  lua_pushboolean(L, _isatty(fd));
+#else
+  lua_pushboolean(L, isatty(fd));
+#endif
+  return 1;
+}
+
+// ============================================================================
 // Register native helper bindings
 //
 // These are available in Lua as the global table `scs_native`.
@@ -288,6 +312,9 @@ static void register_native_bindings(lua_State *L) {
 
   lua_pushcfunction(L, l_is_absolute_path);
   lua_setfield(L, -2, "is_absolute_path");
+
+  lua_pushcfunction(L, l_is_tty);
+  lua_setfield(L, -2, "is_tty");
 
   lua_pushstring(L, SCS_VERSION);
   lua_setfield(L, -2, "version");
