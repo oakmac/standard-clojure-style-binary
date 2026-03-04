@@ -154,14 +154,14 @@ local file_extensions = default_file_extensions
 -- Returns: {[".clj"]=true, [".cljs"]=true, [".cljc"]=true}
 local function parse_file_ext(ext_str)
 	local exts = {}
-	for ext in string.gmatch(ext_str, "[^,]+") do
+	for ext1 in string.gmatch(ext_str, "[^,]+") do
 		-- trim whitespace
-		ext = string.match(ext, "^%s*(.-)%s*$")
+		local ext2 = string.match(ext1, "^%s*(.-)%s*$")
 		-- add leading period if missing
-		if not starts_with(ext, ".") then
-			ext = "." .. ext
+		if not starts_with(ext2, ".") then
+			ext2 = "." .. ext2
 		end
-		exts[ext] = true
+		exts[ext2] = true
 	end
 	return exts
 end
@@ -228,30 +228,36 @@ end
 local function merge_config(cli_options, file_config)
 	local merged = {}
 
-	-- include: combine CLI --include with config "include"
-	merged.include = {}
+	-- include from CLI --include flags (always applied)
+	merged.include = cli_options.include or {}
+
+	-- include from config file (only applied when no direct path args are passed,
+	-- matching the JS CLI behavior)
+	merged.include_from_config = {}
 	if file_config.include then
-		for i = 1, #file_config.include do
-			merged.include[#merged.include + 1] = file_config.include[i]
-		end
-	end
-	if cli_options.include then
-		for i = 1, #cli_options.include do
-			merged.include[#merged.include + 1] = cli_options.include[i]
+		if type(file_config.include) == "string" then
+			merged.include_from_config = { file_config.include }
+		elseif type(file_config.include) == "table" then
+			for i = 1, #file_config.include do
+				merged.include_from_config[#merged.include_from_config + 1] = file_config.include[i]
+			end
 		end
 	end
 
-	-- ignore: combine CLI --ignore with config "ignore"
-	merged.ignore = {}
-	if file_config.ignore then
-		for i = 1, #file_config.ignore do
-			merged.ignore[#merged.ignore + 1] = file_config.ignore[i]
-		end
-	end
+	-- ignore: CLI --ignore overrides config file ignore
 	if cli_options.ignore then
-		for i = 1, #cli_options.ignore do
-			merged.ignore[#merged.ignore + 1] = cli_options.ignore[i]
+		merged.ignore = cli_options.ignore
+	elseif file_config.ignore then
+		merged.ignore = {}
+		if type(file_config.ignore) == "string" then
+			merged.ignore = { file_config.ignore }
+		elseif type(file_config.ignore) == "table" then
+			for i = 1, #file_config.ignore do
+				merged.ignore[#merged.ignore + 1] = file_config.ignore[i]
+			end
 		end
+	else
+		merged.ignore = {}
 	end
 
 	-- log_level: CLI flag overrides config
@@ -299,10 +305,182 @@ local function is_ignored(filepath, ignore_patterns)
 end
 
 -- ==========================================================================
+-- Glob pattern matching
+--
+-- Handles --include patterns like "src/**/*.{clj,cljs,cljc}".
+-- Supports:
+--   **       — match any path including directory separators
+--   *        — match anything except directory separators
+--   ?        — match a single character except directory separators
+--   {a,b,c}  — brace expansion (single level, no nesting)
+-- ==========================================================================
+
+-- Characters that are special in Lua patterns and need escaping.
+local lua_pattern_specials = {
+	["("] = true,
+	[")"] = true,
+	["."] = true,
+	["%"] = true,
+	["+"] = true,
+	["-"] = true,
+	["["] = true,
+	["]"] = true,
+	["^"] = true,
+	["$"] = true,
+}
+
+-- Expand {a,b,c} brace patterns into multiple strings.
+-- Only handles a single level of braces (no nesting).
+-- "src/**/*.{clj,cljs}" -> {"src/**/*.clj", "src/**/*.cljs"}
+-- "src/**/*.clj" -> {"src/**/*.clj"} (no braces, returned as-is)
+local function expand_braces(pattern)
+	local prefix, alternatives, suffix = string.match(pattern, "^(.-)%{(.-)%}(.*)$")
+	if not prefix then
+		return { pattern }
+	end
+
+	local results = {}
+	for alt in string.gmatch(alternatives, "[^,]+") do
+		results[#results + 1] = prefix .. alt .. suffix
+	end
+	return results
+end
+
+-- Convert a glob pattern (after brace expansion) to a Lua pattern string.
+local function glob_to_lua_pattern(glob)
+	local p = "^"
+	local i = 1
+	local len = #glob
+
+	while i <= len do
+		local c = string.sub(glob, i, i)
+
+		if c == "*" then
+			if i + 1 <= len and string.sub(glob, i + 1, i + 1) == "*" then
+				-- ** : match anything including /
+				p = p .. ".*"
+				i = i + 2
+				-- skip trailing / after **
+				if i <= len and (string.sub(glob, i, i) == "/" or string.sub(glob, i, i) == sep) then
+					-- allow the separator to optionally match (** at end of pattern
+					-- should still work)
+					p = p .. "/?"
+					i = i + 1
+				end
+			else
+				-- * : match anything except /
+				p = p .. "[^/]*"
+				i = i + 1
+			end
+		elseif c == "?" then
+			p = p .. "[^/]"
+			i = i + 1
+		elseif lua_pattern_specials[c] then
+			p = p .. "%" .. c
+			i = i + 1
+		else
+			p = p .. c
+			i = i + 1
+		end
+	end
+
+	p = p .. "$"
+	return p
+end
+
+-- Extract the root directory from a glob pattern.
+-- Everything before the first wildcard character, trimmed to the last separator.
+-- "src/**/*.clj" -> "src"
+-- "**/*.clj" -> "."
+local function extract_glob_root(pattern)
+	-- Find the first glob special character
+	local first_special = nil
+	for i = 1, #pattern do
+		local c = string.sub(pattern, i, i)
+		if c == "*" or c == "?" or c == "{" or c == "[" then
+			first_special = i
+			break
+		end
+	end
+
+	if not first_special then
+		-- No wildcards — treat as literal path
+		return pattern
+	end
+
+	-- Take everything before the first special char
+	local prefix = string.sub(pattern, 1, first_special - 1)
+
+	-- Find the last separator in the prefix
+	local last_sep = nil
+	for i = #prefix, 1, -1 do
+		local c = string.sub(prefix, i, i)
+		if c == "/" or c == sep then
+			last_sep = i
+			break
+		end
+	end
+
+	if last_sep then
+		return string.sub(prefix, 1, last_sep - 1)
+	else
+		return "."
+	end
+end
+
+-- Collect ALL files recursively from a directory (no extension filtering).
+-- Used by glob resolution, where the glob pattern itself determines which
+-- files match.
+local function collect_all_files(dir_path, results)
+	results = results or {}
+	dir_path = strip_trailing_sep(dir_path)
+	local entries = scs_native.list_directory(dir_path)
+
+	for i = 1, #entries do
+		local entry = entries[i]
+		local full_path = dir_path .. sep .. entry.name
+
+		if entry.is_dir then
+			collect_all_files(full_path, results)
+		else
+			results[#results + 1] = full_path
+		end
+	end
+
+	return results
+end
+
+-- Resolve a glob pattern into a list of matching file paths.
+-- Expands braces, finds the root directory, collects all files, and filters
+-- by the Lua pattern.
+local function resolve_glob_pattern(pattern, ignore_patterns)
+	local expanded = expand_braces(pattern)
+	local results = {}
+
+	for i = 1, #expanded do
+		local glob = expanded[i]
+		local root = extract_glob_root(glob)
+		local lua_pat = glob_to_lua_pattern(glob)
+		local all_files = collect_all_files(root)
+
+		for j = 1, #all_files do
+			local filepath = all_files[j]
+			if string.match(filepath, lua_pat) then
+				if not is_ignored(filepath, ignore_patterns) then
+					results[#results + 1] = filepath
+				end
+			end
+		end
+	end
+
+	return results
+end
+
+-- ==========================================================================
 -- File discovery
 -- ==========================================================================
 
--- Recursively collect files from a directory.
+-- Recursively collect files from a directory, filtered by extension.
 -- Returns an array of absolute file paths.
 local function collect_files(dir_path, ignore_patterns, results)
 	results = results or {}
@@ -377,9 +555,9 @@ local function print_usage()
 	print("  --version, -v    Show version")
 	print("  --config, -c     Path to config file (.standard-clj.json)")
 	print("  --ignore, -ig    Ignore files or directories")
+	print("  --include, -in   Include files matching a glob pattern")
 	print("  --log-level, -l  Log level: everything, ignore-already-formatted, quiet")
 	print("  --file-ext       Comma-separated list of file extensions (default: clj,cljs,cljc,edn,jank)")
-	-- TODO: --include
 	print("")
 	print("Examples:")
 	print("  standard-clj list src/")
@@ -651,7 +829,6 @@ local function parse_args()
 			options.log_level = arg[i]
 		elseif a == "--include" or a == "-in" then
 			i = i + 1
-			-- TODO: glob pattern support
 			options.include = options.include or {}
 			options.include[#options.include + 1] = arg[i]
 		elseif a == "--ignore" or a == "-ig" then
@@ -746,8 +923,38 @@ for i = 1, #paths do
 	end
 end
 
--- TODO: resolve --include glob patterns
+-- Resolve CLI --include glob patterns (always applied)
+if #config.include > 0 then
+	for i = 1, #config.include do
+		local resolved = resolve_glob_pattern(config.include[i], config.ignore)
+		for j = 1, #resolved do
+			files[#files + 1] = resolved[j]
+		end
+	end
+end
+
+-- Resolve config file --include patterns (only when no direct path args passed)
+if #paths == 0 and #config.include_from_config > 0 then
+	for i = 1, #config.include_from_config do
+		local resolved = resolve_glob_pattern(config.include_from_config[i], config.ignore)
+		for j = 1, #resolved do
+			files[#files + 1] = resolved[j]
+		end
+	end
+end
+
 -- TODO: load .standard-clj.edn config file (needs EDN parser)
+
+-- Deduplicate (a file could match both a direct arg and a glob pattern)
+local seen = {}
+local unique_files = {}
+for i = 1, #files do
+	if not seen[files[i]] then
+		seen[files[i]] = true
+		unique_files[#unique_files + 1] = files[i]
+	end
+end
+files = unique_files
 
 table.sort(files)
 
