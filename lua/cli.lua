@@ -125,12 +125,54 @@ local function ends_with(str, suffix)
 	return string.sub(str, -#suffix) == suffix
 end
 
-local function has_clojure_extension(filename)
-	return ends_with(filename, ".clj")
-		or ends_with(filename, ".cljs")
-		or ends_with(filename, ".cljc")
-		or ends_with(filename, ".edn")
-		or ends_with(filename, ".jank")
+-- Strip trailing path separator(s) from a path.
+-- "src/" -> "src", "src" -> "src", "/" -> "/"
+local function strip_trailing_sep(path)
+	while #path > 1 and ends_with(path, sep) do
+		path = string.sub(path, 1, -2)
+	end
+	return path
+end
+
+-- ==========================================================================
+-- File extension matching
+-- ==========================================================================
+
+local default_file_extensions = {
+	[".clj"] = true,
+	[".cljs"] = true,
+	[".cljc"] = true,
+	[".edn"] = true,
+	[".jank"] = true,
+}
+
+-- This gets set from the --file-ext flag or stays as the default.
+local file_extensions = default_file_extensions
+
+-- Parse a comma-separated --file-ext string into a lookup table.
+-- Input: "clj,cljs,cljc" or ".clj,.cljs,.cljc" (periods are added if missing)
+-- Returns: {[".clj"]=true, [".cljs"]=true, [".cljc"]=true}
+local function parse_file_ext(ext_str)
+	local exts = {}
+	for ext in string.gmatch(ext_str, "[^,]+") do
+		-- trim whitespace
+		ext = string.match(ext, "^%s*(.-)%s*$")
+		-- add leading period if missing
+		if not starts_with(ext, ".") then
+			ext = "." .. ext
+		end
+		exts[ext] = true
+	end
+	return exts
+end
+
+local function has_matching_extension(filename)
+	for ext, _ in pairs(file_extensions) do
+		if ends_with(filename, ext) then
+			return true
+		end
+	end
+	return false
 end
 
 local function file_str(n)
@@ -264,6 +306,7 @@ end
 -- Returns an array of absolute file paths.
 local function collect_files(dir_path, ignore_patterns, results)
 	results = results or {}
+	dir_path = strip_trailing_sep(dir_path)
 	local entries = scs_native.list_directory(dir_path)
 
 	for i = 1, #entries do
@@ -275,7 +318,7 @@ local function collect_files(dir_path, ignore_patterns, results)
 				collect_files(full_path, ignore_patterns, results)
 			end
 		else
-			if has_clojure_extension(entry.name) then
+			if has_matching_extension(entry.name) then
 				if not is_ignored(full_path, ignore_patterns) then
 					results[#results + 1] = full_path
 				end
@@ -289,6 +332,8 @@ end
 -- Resolve a CLI argument to a list of files.
 -- If it's a file, return it. If it's a directory, recurse.
 local function resolve_arg_to_files(a, ignore_patterns)
+	a = strip_trailing_sep(a)
+
 	-- Try as file first: attempt to read it
 	local content = scs_native.read_file(a)
 	if content then
@@ -333,7 +378,8 @@ local function print_usage()
 	print("  --config, -c     Path to config file (.standard-clj.json)")
 	print("  --ignore, -ig    Ignore files or directories")
 	print("  --log-level, -l  Log level: everything, ignore-already-formatted, quiet")
-	-- TODO: --include, --file-ext
+	print("  --file-ext       Comma-separated list of file extensions (default: clj,cljs,cljc,edn,jank)")
+	-- TODO: --include
 	print("")
 	print("Examples:")
 	print("  standard-clj list src/")
@@ -615,6 +661,9 @@ local function parse_args()
 		elseif a == "--config" or a == "-c" then
 			i = i + 1
 			options.config = arg[i]
+		elseif a == "--file-ext" then
+			i = i + 1
+			options.file_ext = arg[i]
 		elseif not command then
 			command = a
 		else
@@ -679,6 +728,11 @@ local config = merge_config(options, file_config)
 
 -- Set log level from merged config
 set_log_level(config.log_level)
+
+-- Set custom file extensions if provided
+if options.file_ext then
+	file_extensions = parse_file_ext(options.file_ext)
+end
 
 -- Print program info header
 print_program_info(command)
