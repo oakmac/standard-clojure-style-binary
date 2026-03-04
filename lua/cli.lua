@@ -6,6 +6,7 @@
 --   arg[]        — command-line arguments (standard Lua convention)
 --   scs_native   — C helper functions (list_directory, read_file, write_file, etc.)
 --   require("standard-clojure-style") — the SCS formatting library
+--   require("dkjson")                 — JSON parser for config files
 --
 -- Returns an integer exit code (0 = success, 1 = failure).
 
@@ -37,12 +38,127 @@ local function has_clojure_extension(filename)
 end
 
 -- ==========================================================================
+-- Config file loading
+-- ==========================================================================
+
+-- Try to load a JSON config file. Returns a table or nil.
+local function load_json_config(path)
+	local content = scs_native.read_file(path)
+	if not content then
+		return nil
+	end
+
+	local json = require("dkjson")
+	local config, _, err = json.decode(content)
+	if err then
+		print_stderr("WARN: failed to parse " .. path .. ": " .. err)
+		return nil
+	end
+
+	if type(config) ~= "table" then
+		print_stderr("WARN: config file " .. path .. " must contain a JSON object")
+		return nil
+	end
+
+	return config
+end
+
+-- Search for a config file in the current working directory.
+-- Checks .standard-clj.json (JSON is what we support for now).
+-- Returns a config table (possibly empty) and the path that was loaded (or nil).
+local function find_config()
+	-- TODO: also support .standard-clj.edn once we have an EDN parser
+	local json_path = ".standard-clj.json"
+	local config = load_json_config(json_path)
+	if config then
+		return config, json_path
+	end
+
+	return {}, nil
+end
+
+-- Merge CLI options with config file settings.
+-- CLI flags take precedence over config file values.
+local function merge_config(cli_options, file_config)
+	local merged = {}
+
+	-- include: combine CLI --include with config "include"
+	merged.include = {}
+	if file_config.include then
+		for i = 1, #file_config.include do
+			merged.include[#merged.include + 1] = file_config.include[i]
+		end
+	end
+	if cli_options.include then
+		for i = 1, #cli_options.include do
+			merged.include[#merged.include + 1] = cli_options.include[i]
+		end
+	end
+
+	-- ignore: combine CLI --ignore with config "ignore"
+	merged.ignore = {}
+	if file_config.ignore then
+		for i = 1, #file_config.ignore do
+			merged.ignore[#merged.ignore + 1] = file_config.ignore[i]
+		end
+	end
+	if cli_options.ignore then
+		for i = 1, #cli_options.ignore do
+			merged.ignore[#merged.ignore + 1] = cli_options.ignore[i]
+		end
+	end
+
+	-- log_level: CLI flag overrides config
+	merged.log_level = cli_options.log_level or file_config["log-level"] or "everything"
+
+	return merged
+end
+
+-- ==========================================================================
+-- Ignore matching
+-- ==========================================================================
+
+-- Check if a file path should be ignored based on the ignore patterns.
+-- For now, supports simple prefix matching (directories) and exact matches.
+local function is_ignored(filepath, ignore_patterns)
+	if not ignore_patterns or #ignore_patterns == 0 then
+		return false
+	end
+
+	for i = 1, #ignore_patterns do
+		local pattern = ignore_patterns[i]
+
+		-- Strip trailing separator for consistent matching
+		if ends_with(pattern, sep) then
+			pattern = string.sub(pattern, 1, -2)
+		end
+
+		-- Check if the path starts with the ignore pattern (directory match)
+		if starts_with(filepath, pattern .. sep) or filepath == pattern then
+			return true
+		end
+
+		-- Check if any path component matches
+		if string.find(filepath, sep .. pattern .. sep, 1, true) then
+			return true
+		end
+
+		-- Check suffix match (for patterns like "generated/")
+		if ends_with(filepath, sep .. pattern) then
+			return true
+		end
+	end
+
+	return false
+end
+
+-- ==========================================================================
 -- File discovery
 -- ==========================================================================
 
 -- Recursively collect files from a directory.
 -- Returns an array of absolute file paths.
-local function collect_files(dir_path, results)
+local function collect_files(dir_path, ignore_patterns, results)
 	results = results or {}
 	local entries = scs_native.list_directory(dir_path)
 
@@ -51,10 +167,14 @@ local function collect_files(dir_path, results)
 		local full_path = dir_path .. sep .. entry.name
 
 		if entry.is_dir then
-			collect_files(full_path, results)
+			if not is_ignored(full_path, ignore_patterns) then
+				collect_files(full_path, ignore_patterns, results)
+			end
 		else
 			if has_clojure_extension(entry.name) then
-				results[#results + 1] = full_path
+				if not is_ignored(full_path, ignore_patterns) then
+					results[#results + 1] = full_path
+				end
 			end
 		end
 	end
@@ -64,17 +184,21 @@ end
 
 -- Resolve a CLI argument to a list of files.
 -- If it's a file, return it. If it's a directory, recurse.
-local function resolve_arg_to_files(a)
+local function resolve_arg_to_files(a, ignore_patterns)
 	-- Try as file first: attempt to read it
 	local content = scs_native.read_file(a)
 	if content then
-		return { a }
+		if not is_ignored(a, ignore_patterns) then
+			return { a }
+		else
+			return {}
+		end
 	end
 
 	-- Try as directory
 	local entries = scs_native.list_directory(a)
 	if #entries > 0 then
-		return collect_files(a)
+		return collect_files(a, ignore_patterns)
 	end
 
 	-- Check if it might be a directory that's empty
@@ -102,7 +226,10 @@ local function print_usage()
 	print("Options:")
 	print("  --help, -h       Show this help message")
 	print("  --version, -v    Show version")
-	-- TODO: --include, --ignore, --config, --log-level
+	print("  --config, -c     Path to config file (.standard-clj.json)")
+	print("  --ignore, -ig    Ignore files or directories")
+	print("  --log-level, -l  Log level: everything, ignore-already-formatted, quiet")
+	-- TODO: --include, --file-ext
 	print("")
 	print("Examples:")
 	print("  standard-clj list src/")
@@ -123,8 +250,9 @@ local function cmd_list(files)
 	return 0
 end
 
-local function cmd_check(files)
+local function cmd_check(files, config)
 	local scs = require("standard-clojure-style")
+	local log_level = config.log_level or "everything"
 
 	local num_already_formatted = 0
 	local num_need_formatting = 0
@@ -157,19 +285,25 @@ local function cmd_check(files)
 	end
 
 	-- Summary
-	local total = num_already_formatted + num_need_formatting + num_errors
-	print("")
+	if log_level ~= "quiet" then
+		local total = num_already_formatted + num_need_formatting + num_errors
+		print("")
+		if num_need_formatting == 0 and num_errors == 0 then
+			print(total .. " file(s) formatted with Standard Clojure Style")
+		else
+			print(num_already_formatted .. " file(s) already formatted")
+			if num_need_formatting > 0 then
+				print(num_need_formatting .. " file(s) need formatting")
+			end
+			if num_errors > 0 then
+				print(num_errors .. " file(s) with errors")
+			end
+		end
+	end
+
 	if num_need_formatting == 0 and num_errors == 0 then
-		print(total .. " file(s) formatted with Standard Clojure Style")
 		return 0
 	else
-		print(num_already_formatted .. " file(s) already formatted")
-		if num_need_formatting > 0 then
-			print(num_need_formatting .. " file(s) need formatting")
-		end
-		if num_errors > 0 then
-			print(num_errors .. " file(s) with errors")
-		end
 		return 1
 	end
 end
@@ -197,8 +331,9 @@ local function cmd_fix_stdin()
 	end
 end
 
-local function cmd_fix(files)
+local function cmd_fix(files, config)
 	local scs = require("standard-clojure-style")
+	local log_level = config.log_level or "everything"
 
 	local num_already_formatted = 0
 	local num_formatted = 0
@@ -221,7 +356,9 @@ local function cmd_fix(files)
 				else
 					local ok, err = scs_native.write_file(filename, formatted)
 					if ok then
-						print("F " .. filename)
+						if log_level == "everything" then
+							print("F " .. filename)
+						end
 						num_formatted = num_formatted + 1
 					else
 						print_stderr("E " .. filename .. " - " .. (err or "write error"))
@@ -237,14 +374,20 @@ local function cmd_fix(files)
 	end
 
 	-- Summary
-	local total = num_already_formatted + num_formatted + num_errors
-	print("")
+	if log_level ~= "quiet" then
+		local total = num_already_formatted + num_formatted + num_errors
+		print("")
+		if num_errors == 0 then
+			print(total .. " file(s) formatted with Standard Clojure Style")
+		else
+			print((num_already_formatted + num_formatted) .. " file(s) formatted")
+			print(num_errors .. " file(s) with errors")
+		end
+	end
+
 	if num_errors == 0 then
-		print(total .. " file(s) formatted with Standard Clojure Style")
 		return 0
 	else
-		print((num_already_formatted + num_formatted) .. " file(s) formatted")
-		print(num_errors .. " file(s) with errors")
 		return 1
 	end
 end
@@ -328,18 +471,34 @@ if command == "fix" and #paths == 1 and paths[1] == "-" then
 	return cmd_fix_stdin()
 end
 
+-- Load config file
+local file_config, config_path
+if options.config then
+	-- Explicit --config flag
+	file_config = load_json_config(options.config)
+	if not file_config then
+		print_stderr("ERROR: could not load config file: " .. options.config)
+		return 1
+	end
+	config_path = options.config
+else
+	-- Auto-detect in cwd
+	file_config, config_path = find_config()
+end
+
+local config = merge_config(options, file_config)
+
 -- Resolve paths to file lists
 local files = {}
 for i = 1, #paths do
-	local resolved = resolve_arg_to_files(paths[i])
+	local resolved = resolve_arg_to_files(paths[i], config.ignore)
 	for j = 1, #resolved do
 		files[#files + 1] = resolved[j]
 	end
 end
 
 -- TODO: resolve --include glob patterns
--- TODO: resolve --ignore patterns
--- TODO: load .standard-clj.edn / .standard-clj.json config file
+-- TODO: load .standard-clj.edn config file (needs EDN parser)
 
 table.sort(files)
 
@@ -352,9 +511,9 @@ end
 if command == "list" then
 	return cmd_list(files)
 elseif command == "check" then
-	return cmd_check(files)
+	return cmd_check(files, config)
 elseif command == "fix" then
-	return cmd_fix(files)
+	return cmd_fix(files, config)
 end
 
 return 1

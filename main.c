@@ -11,6 +11,7 @@
 //   - Standard Lua libraries (io, os, string, table, etc.)
 //   - The `arg` table populated from C argv (standard Lua convention)
 //   - The SCS library available via require("standard-clojure-style")
+//   - The dkjson library available via require("dkjson")
 //   - A `scs_native` table with C helper functions (directory traversal, etc.)
 
 #include "vendor/lua/lauxlib.h"
@@ -30,7 +31,9 @@
 #endif
 
 // Generated at build time from .lua source files.
-// Contains: scs_lib_lua[], scs_lib_lua_len, cli_entry_lua[], cli_entry_lua_len
+// Contains: scs_lib_lua[], scs_lib_lua_len,
+//           dkjson_lib_lua[], dkjson_lib_lua_len,
+//           cli_entry_lua[], cli_entry_lua_len
 #include "build/scs_embedded.h"
 
 // ============================================================================
@@ -293,12 +296,14 @@ static void register_native_bindings(lua_State *L) {
 }
 
 // ============================================================================
-// SCS Module Loader
+// Module Loaders
 //
-// Pre-loads the SCS library into package.preload so that Lua code can use:
+// Pre-loads embedded Lua libraries into package.preload so that Lua code can
+// use require() as normal:
 //   local scs = require("standard-clojure-style")
+//   local json = require("dkjson")
 //
-// The library source is embedded as a C byte array at compile time.
+// The library sources are embedded as C byte arrays at compile time.
 // ============================================================================
 
 static int scs_module_loader(lua_State *L) {
@@ -310,11 +315,25 @@ static int scs_module_loader(lua_State *L) {
   return 1;
 }
 
-static void register_scs_module(lua_State *L) {
+static int dkjson_module_loader(lua_State *L) {
+  if (luaL_loadbuffer(L, (const char *)dkjson_lib_lua, dkjson_lib_lua_len,
+                      "dkjson") != LUA_OK) {
+    return lua_error(L);
+  }
+  lua_call(L, 0, 1);
+  return 1;
+}
+
+static void register_embedded_modules(lua_State *L) {
   lua_getglobal(L, "package");
   lua_getfield(L, -1, "preload");
+
   lua_pushcfunction(L, scs_module_loader);
   lua_setfield(L, -2, "standard-clojure-style");
+
+  lua_pushcfunction(L, dkjson_module_loader);
+  lua_setfield(L, -2, "dkjson");
+
   lua_pop(L, 2); // pop preload and package
 }
 
@@ -344,9 +363,9 @@ int main(int argc, char *argv[]) {
   }
   lua_setglobal(L, "arg");
 
-  // -- Register C bindings and the SCS module --
+  // -- Register C bindings and embedded modules --
   register_native_bindings(L);
-  register_scs_module(L);
+  register_embedded_modules(L);
 
   // -- Run the CLI entry point --
   //

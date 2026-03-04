@@ -11,7 +11,7 @@ patterns=(
   README.md
   Makefile
   main.c
-  cli.lua
+  lua/cli.lua
 )
 # ======================================================
 

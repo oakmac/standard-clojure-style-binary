@@ -1,2 +1,4 @@
+build/
 code_dump.txt
+standard-clj
 *.diff
