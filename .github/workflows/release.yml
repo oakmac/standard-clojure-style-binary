@@ -1,0 +1,135 @@
+# Build cross-platform binaries and create a GitHub Release on every tagged push.
+#
+# Usage:
+#   git tag v0.0.1
+#   git push --tags
+#
+# This will:
+#   1. Build standard-clj on Linux (x86_64 + ARM64), macOS (x86_64 + ARM64), Windows (x86_64)
+#   2. Create a GitHub Release with all binaries attached
+#   3. Include the source tarball SHA256 (needed for Homebrew formula updates)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary: standard-clj
+            asset_name: standard-clj-linux-x86_64
+
+          - os: ubuntu-latest
+            target: linux-aarch64
+            binary: standard-clj
+            asset_name: standard-clj-linux-aarch64
+            cross: true
+
+          - os: macos-latest
+            target: macos-aarch64
+            binary: standard-clj
+            asset_name: standard-clj-macos-aarch64
+
+          - os: macos-13
+            target: macos-x86_64
+            binary: standard-clj
+            asset_name: standard-clj-macos-x86_64
+
+          - os: windows-latest
+            target: windows-x86_64
+            binary: standard-clj.exe
+            asset_name: standard-clj-windows-x86_64.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Linux ARM64 cross-compilation ---
+      - name: Install cross-compilation toolchain (Linux ARM64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build (Linux ARM64 cross)
+        if: matrix.cross
+        run: make CC=aarch64-linux-gnu-gcc
+
+      # --- Native builds (everything except Linux ARM64) ---
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: make
+
+      # --- Upload ---
+      - name: Rename binary
+        shell: bash
+        run: |
+          cp ${{ matrix.binary }} ${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Compute source tarball SHA256
+        id: sha
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          SHA=$(curl -sL "$URL" | shasum -a 256 | cut -d ' ' -f 1)
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "Source tarball SHA256 (for Homebrew formula):"
+          echo "  ${SHA}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.sha.outputs.tag }}
+          body: |
+            ## Binaries
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `standard-clj-linux-x86_64` |
+            | Linux ARM64 | `standard-clj-linux-aarch64` |
+            | macOS Apple Silicon | `standard-clj-macos-aarch64` |
+            | macOS Intel | `standard-clj-macos-x86_64` |
+            | Windows x86_64 | `standard-clj-windows-x86_64.exe` |
+
+            ## Homebrew
+
+            Source tarball SHA256: `${{ steps.sha.outputs.sha256 }}`
+
+            Update the formula in [oakmac/homebrew-tap](https://github.com/oakmac/homebrew-tap) with:
+            ```
+            url "https://github.com/${{ github.repository }}/archive/refs/tags/${{ steps.sha.outputs.tag }}.tar.gz"
+            sha256 "${{ steps.sha.outputs.sha256 }}"
+            ```
+          files: |
+            artifacts/**/*
