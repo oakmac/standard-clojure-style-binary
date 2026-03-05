@@ -41,6 +41,11 @@ CLI_LUA = lua/cli.lua
 EMBEDDED_HEADER = build/scs_embedded.h
 
 # ============================================================================
+# Default target — must be first so `make` builds the binary
+# ============================================================================
+all: $(BINARY)
+
+# ============================================================================
 # Embed Phase
 #
 # Convert .lua files to C byte arrays using xxd -i.
@@ -66,7 +71,6 @@ $(EMBEDDED_HEADER): $(SCS_LIB) $(DKJSON_LIB) $(EDN_LIB) $(CLI_LUA)
 # ============================================================================
 # Compile Phase
 # ============================================================================
-all: $(BINARY)
 $(BINARY): main.c $(EMBEDDED_HEADER) $(LUA_SRC)
 	$(CC) $(CFLAGS) -o $@ main.c $(LUA_SRC) $(LDFLAGS)
 
