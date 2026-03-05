@@ -1,5 +1,5 @@
 // main.c
-// Minimal C wrapper that embeds Lua 5.4 and runs the Standard Clojure Style
+// Minimal C wrapper that embeds Lua and runs the Standard Clojure Style
 // CLI. All logic lives in Lua; this file just bootstraps the runtime.
 //
 // Build pipeline:

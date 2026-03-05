@@ -1,6 +1,6 @@
 # Makefile for standard-clojure-style-binary
 #
-# Builds a self-contained binary that embeds Lua 5.4 and the Standard Clojure
+# Builds a self-contained binary that embeds Lua 5.5.0 and the Standard Clojure
 # Style formatter. No external runtime dependencies.
 #
 # Targets:
