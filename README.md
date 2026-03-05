@@ -2,11 +2,11 @@
 
 A small, fast, cross-platform native binary for formatting Clojure code according to [Standard Clojure Style].
 
-Built by embedding [Lua 5.4] and the [Standard Clojure Style Lua library] into a minimal C program.
-The entire binary is self-contained with no runtime dependencies and should be well under 5MB.
+Built by embedding [Lua] and the [Standard Clojure Style Lua library] into a minimal C program.
+The entire binary is self-contained with no runtime dependencies and should be well under 2MB.
 
 [Standard Clojure Style]:https://github.com/oakmac/standard-clojure-style-js
-[Lua 5.4]:https://www.lua.org/
+[Lua]:https://www.lua.org/
 [Standard Clojure Style Lua library]:https://github.com/oakmac/standard-clojure-style-lua
 
 ## Why?
@@ -20,17 +20,19 @@ A native binary is the expected form factor for these distribution channels, and
 it makes Standard Clojure Style accessible to developers who don't have (or
 don't want) a Node.js installation.
 
+> FIXME: we should include a note here that the JS version can be faster due to JIT
+
 [JavaScript implementation]:https://github.com/oakmac/standard-clojure-style-js
 
 ## Technical Approach
 
-This project uses a small C program that embeds the Lua 5.4 interpreter and
+This project uses a small C program that embeds the Lua 5.5.0 interpreter and
 bundles the [Standard Clojure Style Lua library], which is a line-for-line port
 of the JavaScript version and passes the same test suite.
 
 Why C + Lua?
 
-- **Tiny binary.** Lua 5.4 compiles to ~300-400KB. Combined with the SCS Lua
+- **Tiny binary.** Lua compiles to ~300-400KB. Combined with the SCS Lua
   source and a thin C wrapper, the total binary size should be 1-2MB.
 - **Lua was designed for embedding.** This is one of its primary use cases and
   the tooling is mature.
@@ -46,9 +48,10 @@ Why C + Lua?
 
 All dependencies are vendored into this repository:
 
-- **Lua 5.4 source** — the complete Lua interpreter source code
+- **Lua 5.5.0 source** — the complete Lua interpreter source code
 - **Standard Clojure Style Lua** — the `standard-clojure-style.lua` single-file library
-- **LuaFileSystem (lfs)** — for directory traversal and file metadata
+- dkjson
+- END parser (TODO)
 
 No external downloads are needed to build the project.
 
@@ -56,11 +59,11 @@ No external downloads are needed to build the project.
 
 ```
 main.c              — entry point: init Lua, pass argv, call into Lua
-cli.lua             — CLI logic: arg parsing, file discovery, glob matching, config loading
+lua/cli.lua         — CLI logic: arg parsing, file discovery, glob matching, config loading
 vendor/
-  lua-5.4.x/       — Lua interpreter source
-  lfs/              — LuaFileSystem source
+  lua/              — [Lua v5.5.0](https://github.com/lua/lua/releases/tag/v5.5.0)
   standard-clojure-style.lua
+  dkjson.lua
 ```
 
 The C layer is intentionally thin: initialize the Lua state, pass command-line
