@@ -33,17 +33,18 @@ jobs:
             target: linux-aarch64
             binary: standard-clj
             asset_name: standard-clj-linux-aarch64
-            cross: true
+            cross: aarch64-linux-gnu-gcc
 
           - os: macos-latest
             target: macos-aarch64
             binary: standard-clj
             asset_name: standard-clj-macos-aarch64
 
-          - os: macos-13
+          - os: macos-latest
             target: macos-x86_64
             binary: standard-clj
             asset_name: standard-clj-macos-x86_64
+            cross: "cc -target x86_64-apple-darwin"
 
           - os: windows-latest
             target: windows-x86_64
@@ -55,27 +56,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- Linux ARM64 cross-compilation ---
+      # Linux ARM64 needs the cross-compilation toolchain installed
       - name: Install cross-compilation toolchain (Linux ARM64)
-        if: matrix.cross
+        if: matrix.target == 'linux-aarch64'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build (Linux ARM64 cross)
+      # Cross-compile (Linux ARM64 and macOS Intel)
+      - name: Build (cross-compile)
         if: matrix.cross
-        run: make CC=aarch64-linux-gnu-gcc
+        run: make CC="${{ matrix.cross }}"
 
-      # --- Native builds (everything except Linux ARM64) ---
+      # Native build (Linux x86_64, macOS ARM64, Windows)
       - name: Build (native)
         if: "!matrix.cross"
         run: make
 
-      # --- Upload ---
       - name: Rename binary
         shell: bash
-        run: |
-          cp ${{ matrix.binary }} ${{ matrix.asset_name }}
+        run: cp ${{ matrix.binary }} ${{ matrix.asset_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
