@@ -12,6 +12,7 @@
 //   - The `arg` table populated from C argv (standard Lua convention)
 //   - The SCS library available via require("standard-clojure-style")
 //   - The dkjson library available via require("dkjson")
+//   - The EDN library available via require("edn")
 //   - A `scs_native` table with C helper functions (directory traversal, etc.)
 
 #include "vendor/lua/lauxlib.h"
@@ -35,6 +36,7 @@
 // Generated at build time from .lua source files.
 // Contains: scs_lib_lua[], scs_lib_lua_len,
 //           dkjson_lib_lua[], dkjson_lib_lua_len,
+//           edn_lib_lua[], edn_lib_lua_len,
 //           cli_entry_lua[], cli_entry_lua_len
 #include "build/scs_embedded.h"
 
@@ -329,6 +331,7 @@ static void register_native_bindings(lua_State *L) {
 // use require() as normal:
 //   local scs = require("standard-clojure-style")
 //   local json = require("dkjson")
+//   local edn = require("edn")
 //
 // The library sources are embedded as C byte arrays at compile time.
 // ============================================================================
@@ -351,6 +354,15 @@ static int dkjson_module_loader(lua_State *L) {
   return 1;
 }
 
+static int edn_module_loader(lua_State *L) {
+  if (luaL_loadbuffer(L, (const char *)edn_lib_lua, edn_lib_lua_len,
+                      "edn") != LUA_OK) {
+    return lua_error(L);
+  }
+  lua_call(L, 0, 1);
+  return 1;
+}
+
 static void register_embedded_modules(lua_State *L) {
   lua_getglobal(L, "package");
   lua_getfield(L, -1, "preload");
@@ -360,6 +372,9 @@ static void register_embedded_modules(lua_State *L) {
 
   lua_pushcfunction(L, dkjson_module_loader);
   lua_setfield(L, -2, "dkjson");
+
+  lua_pushcfunction(L, edn_module_loader);
+  lua_setfield(L, -2, "edn");
 
   lua_pop(L, 2); // pop preload and package
 }

@@ -7,6 +7,7 @@
 --   scs_native   — C helper functions (list_directory, read_file, write_file, etc.)
 --   require("standard-clojure-style") — the SCS formatting library
 --   require("dkjson")                 — JSON parser for config files
+--   require("edn")                    — EDN parser for config files
 --
 -- Returns an integer exit code (0 = success, 1 = failure).
 
@@ -115,6 +116,30 @@ local function normalize_log_level(level)
 		return "quiet"
 	end
 	return "everything"
+end
+
+-- normalize_output_format(fmt) -> string or nil
+-- Converts a raw --output value into one of the canonical format strings:
+-- "text", "json", "json-pretty", "edn", "edn-pretty"
+-- Returns "text" for nil/empty/unrecognised values.
+local function normalize_output_format(fmt)
+	if not is_string(fmt) or fmt == "" then
+		return "text"
+	end
+	local s = string.lower(fmt)
+	if s == "json" then
+		return "json"
+	end
+	if s == "json-pretty" then
+		return "json-pretty"
+	end
+	if s == "edn" then
+		return "edn"
+	end
+	if s == "edn-pretty" then
+		return "edn-pretty"
+	end
+	return "text"
 end
 
 -- classify_format_result(original_text, format_result) -> table
@@ -299,6 +324,115 @@ local function build_fix_summary(fix_result)
 end
 
 -- ==========================================================================
+-- Output Encoding — JSON
+-- ==========================================================================
+
+-- encode_json_string(s) -> string
+-- Encodes a Lua string as a JSON string (with quotes and escaping).
+local function encode_json_string(s)
+	-- Replace special characters
+	s = string.gsub(s, '\\', '\\\\')
+	s = string.gsub(s, '"', '\\"')
+	s = string.gsub(s, '\n', '\\n')
+	s = string.gsub(s, '\r', '\\r')
+	s = string.gsub(s, '\t', '\\t')
+	return '"' .. s .. '"'
+end
+
+-- encode_json_array(arr) -> string
+-- Encodes a Lua array of strings as a compact JSON array.
+-- eg: ["a.clj","b.clj"]
+local function encode_json_array(arr)
+	local parts = {}
+	for i = 1, #arr do
+		parts[i] = encode_json_string(arr[i])
+	end
+	return "[" .. table.concat(parts, ",") .. "]"
+end
+
+-- encode_json_array_pretty(arr) -> string
+-- Encodes a Lua array of strings as a pretty-printed JSON array.
+-- eg:
+-- [
+--   "a.clj",
+--   "b.clj"
+-- ]
+local function encode_json_array_pretty(arr)
+	if #arr == 0 then
+		return "[]"
+	end
+	local parts = {}
+	for i = 1, #arr do
+		parts[i] = "  " .. encode_json_string(arr[i])
+	end
+	return "[\n" .. table.concat(parts, ",\n") .. "\n]"
+end
+
+-- ==========================================================================
+-- Output Encoding — EDN
+-- ==========================================================================
+
+-- encode_edn_string(s) -> string
+-- Encodes a Lua string as an EDN string (with quotes and escaping).
+local function encode_edn_string(s)
+	s = string.gsub(s, '\\', '\\\\')
+	s = string.gsub(s, '"', '\\"')
+	s = string.gsub(s, '\n', '\\n')
+	s = string.gsub(s, '\r', '\\r')
+	s = string.gsub(s, '\t', '\\t')
+	return '"' .. s .. '"'
+end
+
+-- encode_edn_array(arr) -> string
+-- Encodes a Lua array of strings as a compact EDN vector.
+-- eg: ["a.clj" "b.clj"]
+local function encode_edn_array(arr)
+	local parts = {}
+	for i = 1, #arr do
+		parts[i] = encode_edn_string(arr[i])
+	end
+	return "[" .. table.concat(parts, " ") .. "]"
+end
+
+-- encode_edn_array_pretty(arr) -> string
+-- Encodes a Lua array of strings as a pretty-printed EDN vector.
+-- eg:
+-- ["a.clj"
+--  "b.clj"]
+local function encode_edn_array_pretty(arr)
+	if #arr == 0 then
+		return "[]"
+	end
+	if #arr == 1 then
+		return "[" .. encode_edn_string(arr[1]) .. "]"
+	end
+	local parts = {}
+	parts[1] = "[" .. encode_edn_string(arr[1])
+	for i = 2, #arr do
+		parts[i] = " " .. encode_edn_string(arr[i])
+	end
+	return table.concat(parts, "\n") .. "]"
+end
+
+-- format_file_list(files, output_format) -> string
+-- Formats an array of file paths according to the given output format.
+-- Used by the list command.
+local function format_file_list(files, output_format)
+	if output_format == "json" then
+		return encode_json_array(files)
+	elseif output_format == "json-pretty" then
+		return encode_json_array_pretty(files)
+	elseif output_format == "edn" then
+		return encode_edn_array(files)
+	elseif output_format == "edn-pretty" then
+		return encode_edn_array_pretty(files)
+	else
+		-- "text" — one file per line (original behavior)
+		return table.concat(files, "\n")
+	end
+end
+
+-- ==========================================================================
 -- Expose pure utility functions for testing
 -- ==========================================================================
 
@@ -306,6 +440,7 @@ _scs_cli_util = {
 	is_string = is_string,
 	is_array = is_array,
 	normalize_log_level = normalize_log_level,
+	normalize_output_format = normalize_output_format,
 	classify_format_result = classify_format_result,
 	file_str = file_str,
 	add_period_prefix = add_period_prefix,
@@ -315,6 +450,13 @@ _scs_cli_util = {
 	merge_config_into_argv = merge_config_into_argv,
 	build_check_summary = build_check_summary,
 	build_fix_summary = build_fix_summary,
+	encode_json_string = encode_json_string,
+	encode_json_array = encode_json_array,
+	encode_json_array_pretty = encode_json_array_pretty,
+	encode_edn_string = encode_edn_string,
+	encode_edn_array = encode_edn_array,
+	encode_edn_array_pretty = encode_edn_array_pretty,
+	format_file_list = format_file_list,
 }
 
 -- ==========================================================================
@@ -439,15 +581,55 @@ local function load_json_config(path)
 	return config
 end
 
+-- Try to load an EDN config file. Returns a table or nil.
+--
+-- The EDN parser returns keywords as plain strings (eg "include" not ":include")
+-- and vectors as Lua arrays. This matches the shape expected by merge_config,
+-- so no further transformation is needed.
+local function load_edn_config(path)
+	local content = scs_native.read_file(path)
+	if not content then
+		return nil
+	end
+
+	local edn = require("edn")
+	local ok, config = pcall(edn.decode, content, {
+		-- Convert EDN keywords to plain strings so config keys match the
+		-- JSON config shape (eg config["include"] not config[":include"]).
+		keyword = function(kw)
+			return kw
+		end,
+	})
+
+	if not ok then
+		print_stderr("WARN: failed to parse " .. path .. ": " .. tostring(config))
+		return nil
+	end
+
+	if type(config) ~= "table" then
+		print_stderr("WARN: config file " .. path .. " must contain an EDN map")
+		return nil
+	end
+
+	return config
+end
+
 -- Search for a config file in the current working directory.
--- Checks .standard-clj.json (JSON is what we support for now).
+-- Checks .standard-clj.json first, then .standard-clj.edn.
 -- Returns a config table (possibly empty) and the path that was loaded (or nil).
 local function find_config()
-	-- TODO: also support .standard-clj.edn once we have an EDN parser
+	-- Try JSON first
 	local json_path = ".standard-clj.json"
 	local config = load_json_config(json_path)
 	if config then
 		return config, json_path
+	end
+
+	-- Try EDN
+	local edn_path = ".standard-clj.edn"
+	config = load_edn_config(edn_path)
+	if config then
+		return config, edn_path
 	end
 
 	return {}, nil
@@ -783,14 +965,16 @@ local function print_usage()
 	print("Options:")
 	print("  --help, -h       Show this help message")
 	print("  --version, -v    Show version")
-	print("  --config, -c     Path to config file (.standard-clj.json)")
+	print("  --config, -c     Path to config file (.standard-clj.json or .standard-clj.edn)")
 	print("  --ignore, -ig    Ignore files or directories")
 	print("  --include, -in   Include files matching a glob pattern")
 	print("  --log-level, -l  Log level: everything, ignore-already-formatted, quiet")
 	print("  --file-ext       Comma-separated list of file extensions (default: clj,cljs,cljc,edn,jank)")
+	print("  --output, -o     Output format for list command: text, json, json-pretty, edn, edn-pretty")
 	print("")
 	print("Examples:")
 	print("  standard-clj list src/")
+	print("  standard-clj list --output json src/")
 	print("  standard-clj check src/ test/")
 	print("  standard-clj fix src/ test/ deps.edn")
 	print("  echo '(ns foo)' | standard-clj fix -")
@@ -806,9 +990,18 @@ local function cmd_version()
 	return 0
 end
 
-local function cmd_list(files)
-	for i = 1, #files do
-		print(files[i])
+local function cmd_list(files, output_format)
+	local fmt = normalize_output_format(output_format)
+
+	-- For structured output formats (json, edn), write directly to stdout
+	-- without going through the log-level-aware print_stdout, since these
+	-- are meant for machine consumption.
+	if fmt ~= "text" then
+		io.stdout:write(format_file_list(files, fmt) .. "\n")
+	else
+		for i = 1, #files do
+			print(files[i])
+		end
 	end
 	return 0
 end
@@ -1062,6 +1255,9 @@ local function parse_args()
 		elseif a == "--log-level" or a == "-l" then
 			i = i + 1
 			options.log_level = arg[i]
+		elseif a == "--output" or a == "-o" then
+			i = i + 1
+			options.output = arg[i]
 		elseif a == "--include" or a == "-in" then
 			i = i + 1
 			options.include = options.include or {}
@@ -1124,13 +1320,18 @@ end
 -- Load config file
 local file_config, config_path
 if options.config then
-	-- Explicit --config flag
-	file_config = load_json_config(options.config)
+	-- Explicit --config flag: detect format from file extension
+	local cfg_path = options.config
+	if ends_with(cfg_path, ".edn") then
+		file_config = load_edn_config(cfg_path)
+	else
+		file_config = load_json_config(cfg_path)
+	end
 	if not file_config then
-		print_stderr("ERROR: could not load config file: " .. options.config)
+		print_stderr("ERROR: could not load config file: " .. cfg_path)
 		return 1
 	end
-	config_path = options.config
+	config_path = cfg_path
 else
 	-- Auto-detect in cwd
 	file_config, config_path = find_config()
@@ -1146,8 +1347,11 @@ if options.file_ext then
 	file_extensions = parse_file_ext(options.file_ext)
 end
 
--- Print program info header
-print_program_info(command)
+-- Print program info header (skip for structured output formats in list command)
+local output_format = normalize_output_format(options.output)
+if not (command == "list" and output_format ~= "text") then
+	print_program_info(command)
+end
 
 -- Resolve paths to file lists
 local files = {}
@@ -1178,8 +1382,6 @@ if #paths == 0 and #config.include_from_config > 0 then
 	end
 end
 
--- TODO: load .standard-clj.edn config file (needs EDN parser)
-
 -- Deduplicate (a file could match both a direct arg and a glob pattern)
 local seen = {}
 local unique_files = {}
@@ -1204,7 +1406,7 @@ end
 
 -- Dispatch
 if command == "list" then
-	return cmd_list(files)
+	return cmd_list(files, options.output)
 elseif command == "check" then
 	return cmd_check(files)
 elseif command == "fix" then

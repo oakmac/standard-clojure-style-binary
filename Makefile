@@ -36,6 +36,7 @@ LUA_SRC = $(filter-out vendor/lua/lua.c vendor/lua/luac.c vendor/lua/onelua.c, \
 # Embedded Lua source files
 SCS_LIB = vendor/standard-clojure-style.lua
 DKJSON_LIB = vendor/dkjson.lua
+EDN_LIB = vendor/edn.lua
 CLI_LUA = lua/cli.lua
 EMBEDDED_HEADER = build/scs_embedded.h
 
@@ -47,15 +48,18 @@ EMBEDDED_HEADER = build/scs_embedded.h
 # C identifiers are predictable:
 #   scs_lib_lua / scs_lib_lua_len
 #   dkjson_lib_lua / dkjson_lib_lua_len
+#   edn_lib_lua / edn_lib_lua_len
 #   cli_entry_lua / cli_entry_lua_len
 # ============================================================================
-$(EMBEDDED_HEADER): $(SCS_LIB) $(DKJSON_LIB) $(CLI_LUA)
+$(EMBEDDED_HEADER): $(SCS_LIB) $(DKJSON_LIB) $(EDN_LIB) $(CLI_LUA)
 	@mkdir -p build
 	@cp $(SCS_LIB) build/scs_lib.lua
 	@cp $(DKJSON_LIB) build/dkjson_lib.lua
+	@cp $(EDN_LIB) build/edn_lib.lua
 	@cp $(CLI_LUA) build/cli_entry.lua
 	@cd build && xxd -i scs_lib.lua > scs_embedded.h
 	@cd build && xxd -i dkjson_lib.lua >> scs_embedded.h
+	@cd build && xxd -i edn_lib.lua >> scs_embedded.h
 	@cd build && xxd -i cli_entry.lua >> scs_embedded.h
 	@echo "Embedded Lua source into $(EMBEDDED_HEADER)"
 

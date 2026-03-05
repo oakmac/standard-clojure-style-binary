@@ -75,6 +75,43 @@ function TestNormalizeLogLevel:testRecognisesQuiet()
 end
 
 -- =========================================================================
+-- normalizeOutputFormat
+-- =========================================================================
+
+TestNormalizeOutputFormat = {}
+
+function TestNormalizeOutputFormat:testReturnsTextByDefault()
+  lu.assertEquals(cli.normalize_output_format(nil), "text")
+  lu.assertEquals(cli.normalize_output_format(""), "text")
+  lu.assertEquals(cli.normalize_output_format("junk"), "text")
+  lu.assertEquals(cli.normalize_output_format(42), "text")
+end
+
+function TestNormalizeOutputFormat:testRecognisesJson()
+  lu.assertEquals(cli.normalize_output_format("json"), "json")
+  lu.assertEquals(cli.normalize_output_format("JSON"), "json")
+end
+
+function TestNormalizeOutputFormat:testRecognisesJsonPretty()
+  lu.assertEquals(cli.normalize_output_format("json-pretty"), "json-pretty")
+  lu.assertEquals(cli.normalize_output_format("JSON-PRETTY"), "json-pretty")
+end
+
+function TestNormalizeOutputFormat:testRecognisesEdn()
+  lu.assertEquals(cli.normalize_output_format("edn"), "edn")
+  lu.assertEquals(cli.normalize_output_format("EDN"), "edn")
+end
+
+function TestNormalizeOutputFormat:testRecognisesEdnPretty()
+  lu.assertEquals(cli.normalize_output_format("edn-pretty"), "edn-pretty")
+  lu.assertEquals(cli.normalize_output_format("EDN-PRETTY"), "edn-pretty")
+end
+
+function TestNormalizeOutputFormat:testRecognisesText()
+  lu.assertEquals(cli.normalize_output_format("text"), "text")
+end
+
+-- =========================================================================
 -- classifyFormatResult
 -- =========================================================================
 
@@ -587,6 +624,159 @@ function TestBuildFixSummary:testSingleFileFormatted()
   lu.assertEquals(result.total, 1)
   lu.assertTrue(result.all_success)
   lu.assertEquals(result.exit_code, 0)
+end
+
+-- =========================================================================
+-- JSON Encoding
+-- =========================================================================
+
+TestEncodeJsonString = {}
+
+function TestEncodeJsonString:testSimpleString()
+  lu.assertEquals(cli.encode_json_string("hello"), '"hello"')
+end
+
+function TestEncodeJsonString:testStringWithQuotes()
+  lu.assertEquals(cli.encode_json_string('say "hi"'), '"say \\"hi\\""')
+end
+
+function TestEncodeJsonString:testStringWithBackslash()
+  lu.assertEquals(cli.encode_json_string("a\\b"), '"a\\\\b"')
+end
+
+function TestEncodeJsonString:testStringWithNewline()
+  lu.assertEquals(cli.encode_json_string("a\nb"), '"a\\nb"')
+end
+
+function TestEncodeJsonString:testStringWithTab()
+  lu.assertEquals(cli.encode_json_string("a\tb"), '"a\\tb"')
+end
+
+function TestEncodeJsonString:testEmptyString()
+  lu.assertEquals(cli.encode_json_string(""), '""')
+end
+
+function TestEncodeJsonString:testFilePath()
+  lu.assertEquals(cli.encode_json_string("src/foo.clj"), '"src/foo.clj"')
+end
+
+TestEncodeJsonArray = {}
+
+function TestEncodeJsonArray:testEmptyArray()
+  lu.assertEquals(cli.encode_json_array({}), "[]")
+end
+
+function TestEncodeJsonArray:testSingleElement()
+  lu.assertEquals(cli.encode_json_array({"a.clj"}), '["a.clj"]')
+end
+
+function TestEncodeJsonArray:testMultipleElements()
+  lu.assertEquals(cli.encode_json_array({"a.clj", "b.clj"}), '["a.clj","b.clj"]')
+end
+
+TestEncodeJsonArrayPretty = {}
+
+function TestEncodeJsonArrayPretty:testEmptyArray()
+  lu.assertEquals(cli.encode_json_array_pretty({}), "[]")
+end
+
+function TestEncodeJsonArrayPretty:testSingleElement()
+  lu.assertEquals(cli.encode_json_array_pretty({"a.clj"}), '[\n  "a.clj"\n]')
+end
+
+function TestEncodeJsonArrayPretty:testMultipleElements()
+  local expected = '[\n  "a.clj",\n  "b.clj",\n  "c.clj"\n]'
+  lu.assertEquals(cli.encode_json_array_pretty({"a.clj", "b.clj", "c.clj"}), expected)
+end
+
+-- =========================================================================
+-- EDN Encoding
+-- =========================================================================
+
+TestEncodeEdnString = {}
+
+function TestEncodeEdnString:testSimpleString()
+  lu.assertEquals(cli.encode_edn_string("hello"), '"hello"')
+end
+
+function TestEncodeEdnString:testStringWithQuotes()
+  lu.assertEquals(cli.encode_edn_string('say "hi"'), '"say \\"hi\\""')
+end
+
+function TestEncodeEdnString:testStringWithBackslash()
+  lu.assertEquals(cli.encode_edn_string("a\\b"), '"a\\\\b"')
+end
+
+function TestEncodeEdnString:testEmptyString()
+  lu.assertEquals(cli.encode_edn_string(""), '""')
+end
+
+TestEncodeEdnArray = {}
+
+function TestEncodeEdnArray:testEmptyArray()
+  lu.assertEquals(cli.encode_edn_array({}), "[]")
+end
+
+function TestEncodeEdnArray:testSingleElement()
+  lu.assertEquals(cli.encode_edn_array({"a.clj"}), '["a.clj"]')
+end
+
+function TestEncodeEdnArray:testMultipleElements()
+  -- EDN uses spaces, not commas
+  lu.assertEquals(cli.encode_edn_array({"a.clj", "b.clj"}), '["a.clj" "b.clj"]')
+end
+
+TestEncodeEdnArrayPretty = {}
+
+function TestEncodeEdnArrayPretty:testEmptyArray()
+  lu.assertEquals(cli.encode_edn_array_pretty({}), "[]")
+end
+
+function TestEncodeEdnArrayPretty:testSingleElement()
+  lu.assertEquals(cli.encode_edn_array_pretty({"a.clj"}), '["a.clj"]')
+end
+
+function TestEncodeEdnArrayPretty:testMultipleElements()
+  -- EDN pretty: first element on same line as [, rest aligned with 1 space indent
+  local expected = '["a.clj"\n "b.clj"\n "c.clj"]'
+  lu.assertEquals(cli.encode_edn_array_pretty({"a.clj", "b.clj", "c.clj"}), expected)
+end
+
+-- =========================================================================
+-- formatFileList
+-- =========================================================================
+
+TestFormatFileList = {}
+
+function TestFormatFileList:testTextFormat()
+  lu.assertEquals(cli.format_file_list({"a.clj", "b.clj"}, "text"), "a.clj\nb.clj")
+end
+
+function TestFormatFileList:testTextFormatSingleFile()
+  lu.assertEquals(cli.format_file_list({"a.clj"}, "text"), "a.clj")
+end
+
+function TestFormatFileList:testJsonFormat()
+  lu.assertEquals(cli.format_file_list({"a.clj", "b.clj"}, "json"), '["a.clj","b.clj"]')
+end
+
+function TestFormatFileList:testJsonPrettyFormat()
+  local expected = '[\n  "a.clj",\n  "b.clj"\n]'
+  lu.assertEquals(cli.format_file_list({"a.clj", "b.clj"}, "json-pretty"), expected)
+end
+
+function TestFormatFileList:testEdnFormat()
+  lu.assertEquals(cli.format_file_list({"a.clj", "b.clj"}, "edn"), '["a.clj" "b.clj"]')
+end
+
+function TestFormatFileList:testEdnPrettyFormat()
+  local expected = '["a.clj"\n "b.clj"]'
+  lu.assertEquals(cli.format_file_list({"a.clj", "b.clj"}, "edn-pretty"), expected)
+end
+
+function TestFormatFileList:testDefaultsToText()
+  lu.assertEquals(cli.format_file_list({"a.clj"}, nil), "a.clj")
+  lu.assertEquals(cli.format_file_list({"a.clj"}, "unknown"), "a.clj")
 end
 
 -- =========================================================================
