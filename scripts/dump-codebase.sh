@@ -13,6 +13,7 @@ patterns=(
   main.c
   lua/cli.lua
   test_cli.lua
+  vendor/README.md
 )
 # ======================================================
 
