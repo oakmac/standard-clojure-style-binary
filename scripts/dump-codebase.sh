@@ -12,6 +12,7 @@ patterns=(
   Makefile
   main.c
   lua/cli.lua
+  test_cli.lua
 )
 # ======================================================
 

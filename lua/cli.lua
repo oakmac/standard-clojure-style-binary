@@ -71,20 +71,268 @@ local function yellow(s, for_stderr)
 end
 
 -- ==========================================================================
+-- Pure Utility Functions
+--
+-- These functions have no side effects and are the Lua equivalents of
+-- cli_util.js from the JavaScript implementation. They are exposed via
+-- the _scs_cli_util global for unit testing.
+-- ==========================================================================
+
+-- is_string(s) -> boolean
+-- Returns true if s is a string.
+local function is_string(s)
+	return type(s) == "string"
+end
+
+-- is_array(x) -> boolean
+-- Returns true if x is a table that looks like an array (sequential integer keys).
+local function is_array(x)
+	if type(x) ~= "table" then
+		return false
+	end
+	local count = 0
+	for _ in pairs(x) do
+		count = count + 1
+	end
+	for i = 1, count do
+		if x[i] == nil then
+			return false
+		end
+	end
+	return count > 0 or next(x) == nil
+end
+
+-- normalize_log_level(level) -> string
+-- Converts a raw --log-level value (string or number) into one of three
+-- canonical strings: "everything", "ignore-already-formatted", or "quiet".
+-- Pure function — no side effects.
+local function normalize_log_level(level)
+	local s = tostring(level or "")
+	if s == "ignore-already-formatted" or s == "1" then
+		return "ignore-already-formatted"
+	end
+	if s == "quiet" or s == "5" then
+		return "quiet"
+	end
+	return "everything"
+end
+
+-- classify_format_result(original_text, format_result) -> table
+-- Given the original file text and the result object from scs.format(),
+-- return a classification:
+--
+--   { action = "already-formatted", output_text = string }
+--   { action = "formatted",         output_text = string }
+--   { action = "error",             error_message = string }
+--
+-- This encapsulates the "append trailing newline and compare" logic that
+-- both cmd_fix and cmd_check need.
+local function classify_format_result(original_text, format_result)
+	if format_result and format_result.status == "success" then
+		local output_text = format_result.out .. "\n"
+
+		if is_string(original_text) and output_text == original_text then
+			return { action = "already-formatted", output_text = output_text }
+		end
+		return { action = "formatted", output_text = output_text }
+	end
+
+	if format_result and format_result.status == "error" and is_string(format_result.reason) then
+		return { action = "error", error_message = format_result.reason }
+	end
+
+	return {
+		action = "error",
+		error_message = "Unknown error! Please help the standard-clj project by opening an issue to report this",
+	}
+end
+
+-- file_str(n) -> string
+-- Returns "file" if n == 1, "files" otherwise.
+local function file_str(n)
+	if n == 1 then
+		return "file"
+	else
+		return "files"
+	end
+end
+
+-- add_period_prefix(s) -> string
+-- Adds a leading period to a file extension string if it doesn't have one.
+-- Returns non-string values as-is.
+local function add_period_prefix(s)
+	if not is_string(s) then
+		return s
+	end
+	if string.sub(s, 1, 1) ~= "." then
+		return "." .. s
+	end
+	return s
+end
+
+-- relative_filename(filename, root_dir) -> string
+-- Strips root_dir prefix from filename.
+local function relative_filename(filename, root_dir)
+	if root_dir == "" then
+		return filename
+	end
+	local start_pos, end_pos = string.find(filename, root_dir, 1, true)
+	if start_pos == 1 then
+		return string.sub(filename, end_pos + 1)
+	end
+	return filename
+end
+
+-- set_difference(set_a, set_b) -> table
+-- Given two tables used as sets (keys are the elements, values are true),
+-- returns a new set with elements in set_a that are not in set_b.
+local function set_difference(set_a, set_b)
+	local result = {}
+	for k, _ in pairs(set_a) do
+		if not set_b[k] then
+			result[k] = true
+		end
+	end
+	return result
+end
+
+-- convert_file_ext(ext_str) -> table (set)
+-- Convert a comma-separated file extension string into a lookup table.
+-- Input: "clj,cljs,.edn" -> {[".clj"]=true, [".cljs"]=true, [".edn"]=true}
+-- Equivalent of convertFileExt in cli_util.js.
+local function convert_file_ext(ext_str)
+	if not is_string(ext_str) or ext_str == "" then
+		return nil
+	end
+	local exts = {}
+	for ext1 in string.gmatch(ext_str, "[^,]+") do
+		-- trim whitespace
+		local ext2 = string.match(ext1, "^%s*(.-)%s*$")
+		-- add leading period if missing
+		ext2 = add_period_prefix(ext2)
+		exts[ext2] = true
+	end
+	return exts
+end
+
+-- merge_config_into_argv(argv, config) -> table
+-- Given an argv-like table and a parsed config object (from .standard-clj.json),
+-- merge config values into argv. CLI flags take precedence.
+-- Returns argv (mutated). If config is nil, returns argv unchanged.
+-- This is the Lua equivalent of mergeConfigIntoArgv in cli_util.js.
+local function merge_config_into_argv(argv, config)
+	if not config then
+		return argv
+	end
+
+	argv._options_loaded_via_config_file = true
+
+	if not argv["log-level"] and config["log-level"] then
+		argv["log-level"] = config["log-level"]
+	end
+
+	if is_string(config.include) then
+		argv.include_from_config = { config.include }
+	elseif is_array(config.include) then
+		argv.include_from_config = {}
+		for i = 1, #config.include do
+			argv.include_from_config[i] = config.include[i]
+		end
+	end
+
+	if is_string(config.ignore) then
+		argv.ignore_from_config = { config.ignore }
+	elseif is_array(config.ignore) then
+		argv.ignore_from_config = {}
+		for i = 1, #config.ignore do
+			argv.ignore_from_config[i] = config.ignore[i]
+		end
+	end
+
+	return argv
+end
+
+-- build_check_summary(check_result) -> table
+-- Produces counts and exit code from a check result accumulator.
+-- check_result has:
+--   files_already_formatted (array)
+--   files_need_formatting (array)
+--   files_with_errors (array)
+local function build_check_summary(check_result)
+	local num_already_formatted = #check_result.files_already_formatted
+	local num_need_formatting = #check_result.files_need_formatting
+	local num_errors = #check_result.files_with_errors
+	local total = num_already_formatted + num_need_formatting + num_errors
+	local all_formatted = num_already_formatted == total and total > 0
+
+	return {
+		total = total,
+		num_already_formatted = num_already_formatted,
+		num_need_formatting = num_need_formatting,
+		num_errors = num_errors,
+		all_formatted = all_formatted,
+		exit_code = all_formatted and 0 or 1,
+	}
+end
+
+-- build_fix_summary(fix_result) -> table
+-- Produces counts and exit code from a fix result accumulator.
+-- fix_result has:
+--   files_already_formatted (array)
+--   files_were_formatted (array)
+--   files_with_errors (array)
+local function build_fix_summary(fix_result)
+	local num_already_formatted = #fix_result.files_already_formatted
+	local num_were_formatted = #fix_result.files_were_formatted
+	local num_errors = #fix_result.files_with_errors
+	local total = num_already_formatted + num_were_formatted + num_errors
+	local all_success = num_errors == 0 and total > 0
+
+	return {
+		total = total,
+		num_already_formatted = num_already_formatted,
+		num_were_formatted = num_were_formatted,
+		num_errors = num_errors,
+		all_success = all_success,
+		exit_code = all_success and 0 or 1,
+	}
+end
+
+-- ==========================================================================
+-- Expose pure utility functions for testing
+-- ==========================================================================
+
+_scs_cli_util = {
+	is_string = is_string,
+	is_array = is_array,
+	normalize_log_level = normalize_log_level,
+	classify_format_result = classify_format_result,
+	file_str = file_str,
+	add_period_prefix = add_period_prefix,
+	relative_filename = relative_filename,
+	set_difference = set_difference,
+	convert_file_ext = convert_file_ext,
+	merge_config_into_argv = merge_config_into_argv,
+	build_check_summary = build_check_summary,
+	build_fix_summary = build_fix_summary,
+}
+
+-- ==========================================================================
+-- If running in test mode, stop here — do not execute CLI logic.
+-- ==========================================================================
+
+if _G._SCS_TEST_MODE then
+	return 0
+end
+
+-- ==========================================================================
 -- Logging
 -- ==========================================================================
 
 local log_level = "everything"
 
 local function set_log_level(level)
-	level = tostring(level or "everything")
-	if level == "ignore-already-formatted" or level == "1" then
-		log_level = "ignore-already-formatted"
-	elseif level == "quiet" or level == "5" then
-		log_level = "quiet"
-	else
-		log_level = "everything"
-	end
+	log_level = normalize_log_level(level)
 end
 
 local function print_stdout(msg)
@@ -153,17 +401,7 @@ local file_extensions = default_file_extensions
 -- Input: "clj,cljs,cljc" or ".clj,.cljs,.cljc" (periods are added if missing)
 -- Returns: {[".clj"]=true, [".cljs"]=true, [".cljc"]=true}
 local function parse_file_ext(ext_str)
-	local exts = {}
-	for ext1 in string.gmatch(ext_str, "[^,]+") do
-		-- trim whitespace
-		local ext2 = string.match(ext1, "^%s*(.-)%s*$")
-		-- add leading period if missing
-		if not starts_with(ext2, ".") then
-			ext2 = "." .. ext2
-		end
-		exts[ext2] = true
-	end
-	return exts
+	return convert_file_ext(ext_str)
 end
 
 local function has_matching_extension(filename)
@@ -173,14 +411,6 @@ local function has_matching_extension(filename)
 		end
 	end
 	return false
-end
-
-local function file_str(n)
-	if n == 1 then
-		return "file"
-	else
-		return "files"
-	end
 end
 
 -- ==========================================================================
@@ -605,35 +835,33 @@ local function cmd_check(files)
 			local file_end_time = os.clock()
 			local duration_seconds = file_end_time - file_start_time
 
-			if result and result.status == "success" then
-				local formatted = result.out .. "\n"
-				if formatted == content then
-					num_already_formatted = num_already_formatted + 1
-					if log_level ~= "ignore-already-formatted" then
-						print_stdout(
-							green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
-						)
-						at_least_one_file_printed = true
-					end
-				else
-					print_stderr(
-						red("\xE2\x9C\x97", true)
-							.. " "
-							.. bold(filename, true)
-							.. " "
-							.. format_duration(duration_seconds, true)
+			local classification = classify_format_result(content, result)
+
+			if classification.action == "already-formatted" then
+				num_already_formatted = num_already_formatted + 1
+				if log_level ~= "ignore-already-formatted" then
+					print_stdout(
+						green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
 					)
 					at_least_one_file_printed = true
-					num_need_formatting = num_need_formatting + 1
 				end
+			elseif classification.action == "formatted" then
+				print_stderr(
+					red("\xE2\x9C\x97", true)
+						.. " "
+						.. bold(filename, true)
+						.. " "
+						.. format_duration(duration_seconds, true)
+				)
+				at_least_one_file_printed = true
+				num_need_formatting = num_need_formatting + 1
 			else
-				local reason = (result and result.reason) or "unknown error"
 				print_stderr(
 					red("E", true)
 						.. " "
 						.. bold(red(filename, true), true)
 						.. " - "
-						.. reason
+						.. classification.error_message
 						.. " "
 						.. format_duration(duration_seconds, true)
 				)
@@ -727,44 +955,42 @@ local function cmd_fix(files)
 			local file_end_time = os.clock()
 			local duration_seconds = file_end_time - file_start_time
 
-			if result and result.status == "success" then
-				local formatted = result.out .. "\n"
-				if formatted == content then
-					num_already_formatted = num_already_formatted + 1
-					if log_level ~= "ignore-already-formatted" then
-						print_stdout(
-							green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
-						)
-						at_least_one_file_printed = true
-					end
+			local classification = classify_format_result(content, result)
+
+			if classification.action == "already-formatted" then
+				num_already_formatted = num_already_formatted + 1
+				if log_level ~= "ignore-already-formatted" then
+					print_stdout(
+						green("\xE2\x9C\x93") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds)
+					)
+					at_least_one_file_printed = true
+				end
+			elseif classification.action == "formatted" then
+				local ok, err = scs_native.write_file(filename, classification.output_text)
+				if ok then
+					print_stdout(green("F") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds))
+					at_least_one_file_printed = true
+					num_formatted = num_formatted + 1
 				else
-					local ok, err = scs_native.write_file(filename, formatted)
-					if ok then
-						print_stdout(green("F") .. " " .. bold(filename) .. " " .. format_duration(duration_seconds))
-						at_least_one_file_printed = true
-						num_formatted = num_formatted + 1
-					else
-						print_stderr(
-							red("E", true)
-								.. " "
-								.. bold(red(filename, true), true)
-								.. " - "
-								.. (err or "write error")
-								.. " "
-								.. format_duration(duration_seconds, true)
-						)
-						at_least_one_file_printed = true
-						num_errors = num_errors + 1
-					end
+					print_stderr(
+						red("E", true)
+							.. " "
+							.. bold(red(filename, true), true)
+							.. " - "
+							.. (err or "write error")
+							.. " "
+							.. format_duration(duration_seconds, true)
+					)
+					at_least_one_file_printed = true
+					num_errors = num_errors + 1
 				end
 			else
-				local reason = (result and result.reason) or "unknown error"
 				print_stderr(
 					red("E", true)
 						.. " "
 						.. bold(red(filename, true), true)
 						.. " - "
-						.. reason
+						.. classification.error_message
 						.. " "
 						.. format_duration(duration_seconds, true)
 				)
@@ -819,6 +1045,15 @@ local function parse_args()
 	local i = 1
 	while i <= #arg do
 		local a = arg[i]
+
+		-- Support --flag=value syntax: split on first '=' for long options
+		local eq_key, eq_val = string.match(a, "^(%-%-[^=]+)=(.*)$")
+		if eq_key then
+			a = eq_key
+			-- Insert the value as the next argument so the existing "i = i + 1"
+			-- logic picks it up naturally.
+			table.insert(arg, i + 1, eq_val)
+		end
 
 		if a == "--help" or a == "-h" then
 			options.help = true
