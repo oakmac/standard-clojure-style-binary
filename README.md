@@ -1,5 +1,7 @@
 # Standard Clojure Style Binary
 
+> NOTE: As of 06 Mar 2026, this project is under active development. The information below may not be accurate.
+
 A small, fast, cross-platform native binary for formatting Clojure code according to [Standard Clojure Style].
 
 Built by embedding [Lua] and the [Standard Clojure Style Lua library] into a minimal C program.
