@@ -19,7 +19,7 @@ binary size matters to you, this is a perfectly valid option.
 However, the Lua interpreter is significantly slower than JavaScript JIT engines
 (V8, JavaScriptCore) for the string-heavy workload of a code formatter. I
 explored several options to close the performance gap, including LuaJIT, but
-the end result was nothing close to the performance of a compiled [Bun] binary.
+the end result was not close to the performance of a [compiled Bun binary].
 
 Most users will want the faster JS-compiled binary, which you can install via
 Homebrew:
@@ -33,14 +33,15 @@ This repo remains up as a reference for anyone interested in the approach of
 embedding Lua in a C binary for CLI tools. The architecture works well and
 could be a good fit for workloads that are less string-intensive.
 
-[Bun]:https://bun.sh/
+[compiled Bun binary]:https://bun.sh/docs/bundler/executables
 
 ## Why?
 
-The [JavaScript implementation] of Standard Clojure Style works great and can be
-used via `npx`, but it requires Node.js. The goal of this project is to produce
-a native binary that can be distributed through system package managers like
-Homebrew, apt, and Chocolatey — no runtime dependencies required.
+The [JavaScript implementation] of Standard Clojure Style works great and can
+be used via `npx`, but it requires a JavaScript runtime installed
+(like Node.js or Bun). The goal of this project is to produce a native binary
+that can be distributed through system package managers like Homebrew, apt,
+and Chocolatey — no runtime dependencies required.
 
 A native binary is the expected form factor for these distribution channels, and
 it makes Standard Clojure Style accessible to developers who don't have (or
@@ -56,7 +57,7 @@ of the JavaScript version and passes the same test suite.
 
 Why C + Lua?
 
-- **Tiny binary.** Lua compiles to ~300-400KB. Combined with the SCS Lua
+- **Tiny binary.** Lua compiles to ~300-400KB. Combined with the Standard Clojure Style Lua
   source and a thin C wrapper, the total binary size should be 1-2MB.
 - **Lua was designed for embedding.** This is one of its primary use cases and
   the tooling is mature.
@@ -136,8 +137,6 @@ sudo make install
 ```sh
 make                  # build for the current platform
 make clean            # remove build artifacts
-make install          # install to /usr/local/bin (or PREFIX=/custom/path)
-make test             # run the test suite
 ```
 
 ### From a GitHub release

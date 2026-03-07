@@ -10,6 +10,10 @@
 --   require("edn")                    — EDN parser for config files
 --
 -- Returns an integer exit code (0 = success, 1 = failure).
+--
+-- Copyright (c) 2026, Chris Oakman
+-- Release under the ISC license
+-- https://github.com/oakmac/standard-clojure-style-binary/blob/master/LICENSE.md
 
 local version = scs_native.version
 local sep = scs_native.path_separator()
@@ -331,11 +335,11 @@ end
 -- Encodes a Lua string as a JSON string (with quotes and escaping).
 local function encode_json_string(s)
 	-- Replace special characters
-	s = string.gsub(s, '\\', '\\\\')
+	s = string.gsub(s, "\\", "\\\\")
 	s = string.gsub(s, '"', '\\"')
-	s = string.gsub(s, '\n', '\\n')
-	s = string.gsub(s, '\r', '\\r')
-	s = string.gsub(s, '\t', '\\t')
+	s = string.gsub(s, "\n", "\\n")
+	s = string.gsub(s, "\r", "\\r")
+	s = string.gsub(s, "\t", "\\t")
 	return '"' .. s .. '"'
 end
 
@@ -375,11 +379,11 @@ end
 -- encode_edn_string(s) -> string
 -- Encodes a Lua string as an EDN string (with quotes and escaping).
 local function encode_edn_string(s)
-	s = string.gsub(s, '\\', '\\\\')
+	s = string.gsub(s, "\\", "\\\\")
 	s = string.gsub(s, '"', '\\"')
-	s = string.gsub(s, '\n', '\\n')
-	s = string.gsub(s, '\r', '\\r')
-	s = string.gsub(s, '\t', '\\t')
+	s = string.gsub(s, "\n", "\\n")
+	s = string.gsub(s, "\r", "\\r")
+	s = string.gsub(s, "\t", "\\t")
 	return '"' .. s .. '"'
 end
 

@@ -14,6 +14,10 @@
 //   - The dkjson library available via require("dkjson")
 //   - The EDN library available via require("edn")
 //   - A `scs_native` table with C helper functions (directory traversal, etc.)
+//
+// Copyright (c) 2026, Chris Oakman
+// Release under the ISC license
+// https://github.com/oakmac/standard-clojure-style-binary/blob/master/LICENSE.md
 
 #include "vendor/lua/lauxlib.h"
 #include "vendor/lua/lua.h"
@@ -355,8 +359,8 @@ static int dkjson_module_loader(lua_State *L) {
 }
 
 static int edn_module_loader(lua_State *L) {
-  if (luaL_loadbuffer(L, (const char *)edn_lib_lua, edn_lib_lua_len,
-                      "edn") != LUA_OK) {
+  if (luaL_loadbuffer(L, (const char *)edn_lib_lua, edn_lib_lua_len, "edn") !=
+      LUA_OK) {
     return lua_error(L);
   }
   lua_call(L, 0, 1);
